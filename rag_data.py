@@ -29,7 +29,7 @@ if "GIGACHAT_CREDENTIALS" not in os.environ:
 
 # loader = PyPDFLoader("doc_files/" + list_of_files[2])
 # documents = loader.load()
-docs = [PyPDFLoader("doc_files/" + doc).load() for doc in list_of_files]
+docs = [PyPDFLoader(doc).load() for doc in list_of_files]
 
 # flatted list
 documents = [item for sublist in docs for item in sublist]
