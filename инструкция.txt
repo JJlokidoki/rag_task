@@ -1,1 +1,7 @@
 pip install -r requirements.txt
+
+создать файл с GIGACHAT_CREDENTIALS=<token>
+
+в папку doc_files положить документы
+
+`python rag_data.py`

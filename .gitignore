@@ -1,3 +1,7 @@
 .env
 doc_files/
 .venv/
+vector_db
+*.log
+cache
+__pycache__

@@ -1,0 +1,16 @@
+# Основные зависимости для RAG системы
+langchain
+langchain-gigachat
+langchain-chroma
+langchain-core
+chromadb
+python-dotenv
+
+# Веб-интерфейс
+streamlit
+plotly
+pandas
+
+# Дополнительные утилиты
+numpy
+json5
