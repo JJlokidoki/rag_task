@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from query_rag import QualityControlledRAG, vector_store, llm
+    from query_rag import QualityControlledRAG, VECTOR_STORE, LLM
 except ImportError as e:
     st.error(f"Ошибка импорта: {e}")
     st.stop()
@@ -26,8 +26,8 @@ st.set_page_config(
 # Инициализация состояния сессии
 if 'quality_rag' not in st.session_state:
     st.session_state.quality_rag = QualityControlledRAG(
-        vector_store=vector_store,
-        llm=llm,
+        vector_store=VECTOR_STORE,
+        llm=LLM,
         quality_threshold=0.9,
         max_iterations=3,
         enable_monitoring=True

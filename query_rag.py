@@ -16,24 +16,23 @@ import re
 import time
 import logging
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Optional
 import hashlib
-import pickle
 
 load_dotenv(find_dotenv())
 
 if "GIGACHAT_CREDENTIALS" not in os.environ:
     os.environ["GIGACHAT_CREDENTIALS"] = getpass.getpass("Введите ключ авторизации GigaChat API: ")
 
-embeddings = GigaChatEmbeddings(verify_ssl_certs=False)
+EMBEDDINGS = GigaChatEmbeddings(verify_ssl_certs=False)
 
-vector_store = Chroma(
-    embedding_function=embeddings,
+VECTOR_STORE = Chroma(
+    embedding_function=EMBEDDINGS,
     client_settings=Settings(anonymized_telemetry=False),
     persist_directory='./vector_db'
 )
 
-prompt = ChatPromptTemplate.from_template(
+PROMPT = ChatPromptTemplate.from_template(
 """
 Ты эксперт по вопросам криптографии с юридической квалификацией. Отвечай ТОЛЬКО на основе предоставленного контекста.
 Если информации недостаточно - вежливо откажись отвечать. Сохраняй профессиональный тон.
@@ -63,7 +62,7 @@ Question: {input}
 # "Question: {question}" for rag similarity
 # "Question: {input}" for rag-chain
 
-llm = GigaChat(verify_ssl_certs=False, model="GigaChat-2-Max", temperature=0.1)
+LLM = GigaChat(verify_ssl_certs=False, model="GigaChat-2-Max", temperature=0.1)
 
 # Настройка логирования
 logging.basicConfig(
@@ -762,9 +761,9 @@ class QualityControlledRAG:
 # 1. Старый метод (для сравнения)
 def old_method_example():
     question = "что такое УЦ?"
-    rag_chain = create_stuff_documents_chain(llm, prompt)
+    rag_chain = create_stuff_documents_chain(LLM, PROMPT)
     retrieval_chain = create_retrieval_chain(
-        vector_store.as_retriever(
+        VECTOR_STORE.as_retriever(
             search_kwargs={ "k": 2 },
             search_type="similarity"
         ),
@@ -782,8 +781,8 @@ def quality_controlled_example():
     
     # Создаем систему с контролем качества, мониторингом и кэшированием
     quality_rag = QualityControlledRAG(
-        vector_store=vector_store,
-        llm=llm,
+        vector_store=VECTOR_STORE,
+        llm=LLM,
         quality_threshold=0.9,  # Порог качества
         max_iterations=3,       # Максимум попыток улучшения
         enable_monitoring=True, # Включаем мониторинг
@@ -840,8 +839,8 @@ def batch_quality_test():
     ]
     
     quality_rag = QualityControlledRAG(
-        vector_store=vector_store,
-        llm=llm,
+        vector_store=VECTOR_STORE,
+        llm=LLM,
         quality_threshold=0.9,
         max_iterations=3,
         enable_monitoring=True,
@@ -905,8 +904,8 @@ if __name__ == "__main__":
 def interactive_quality_test():
     """Функция для интерактивного тестирования с собственными вопросами"""
     quality_rag = QualityControlledRAG(
-        vector_store=vector_store,
-        llm=llm,
+        vector_store=VECTOR_STORE,
+        llm=LLM,
         quality_threshold=0.9,
         max_iterations=3
     )
