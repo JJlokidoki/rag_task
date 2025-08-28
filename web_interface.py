@@ -1,7 +1,5 @@
 import streamlit as st
-import json
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
 from datetime import datetime
 import sys
@@ -61,6 +59,12 @@ def main():
         
         verbose_mode = st.checkbox("Детальный вывод", value=False)
         
+        # Информация о кэшировании
+        if st.session_state.quality_rag.enable_caching:
+            st.info("💾 Кэширование включено")
+        else:
+            st.warning("💾 Кэширование отключено")
+        
         # Обновляем настройки системы
         st.session_state.quality_rag.quality_threshold = quality_threshold
         st.session_state.quality_rag.max_iterations = max_iterations
@@ -78,6 +82,18 @@ def main():
             if st.session_state.quality_rag.enable_monitoring:
                 st.session_state.quality_rag.monitor.save_metrics()
                 st.success("Метрики сохранены!")
+        
+        if st.button("🗑️ Очистить кэш"):
+            if st.session_state.quality_rag.enable_caching:
+                # Получаем статистику перед очисткой
+                cache_stats = st.session_state.quality_rag.get_cache_stats()
+                items_count = cache_stats.get('total_items', 0) if 'error' not in cache_stats else 0
+                
+                st.session_state.quality_rag.clear_cache()
+                st.success(f"Кэш очищен! Удалено элементов: {items_count}")
+                st.rerun()
+            else:
+                st.warning("Кэширование отключено")
     
     # Основной интерфейс
     col1, col2 = st.columns([2, 1])
@@ -162,7 +178,10 @@ def display_result(result, verbose_mode):
             st.metric("Время ответа", f"{result['response_time']:.2f}с")
     
     with col4:
-        status = "✅ Принят" if result['quality_acceptable'] else "❌ Отклонен"
+        if result.get('from_cache', False):
+            status = "💾 Из кэша"
+        else:
+            status = "✅ Принят" if result['quality_acceptable'] else "❌ Отклонен"
         st.metric("Статус", status)
     
     # Ответ
@@ -193,6 +212,23 @@ def display_metrics():
     st.metric("Success Rate", f"{success_rate:.1%}")
     st.metric("Средняя оценка", f"{metrics['average_quality_score']:.2f}")
     st.metric("Среднее время", f"{metrics['average_response_time']:.1f}с")
+    
+    # Статистика кэша
+    if st.session_state.quality_rag.enable_caching:
+        st.markdown("---")
+        st.subheader("💾 Кэш")
+        
+        cache_stats = st.session_state.quality_rag.get_cache_stats()
+        if 'error' not in cache_stats:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Hit Rate", cache_stats.get('hit_rate', '0%'))
+                st.metric("Элементов в кэше", cache_stats.get('total_items', 0))
+            with col2:
+                st.metric("Cache Hits", cache_stats.get('cache_hits', 0))
+                st.metric("Cache Misses", cache_stats.get('cache_misses', 0))
+        else:
+            st.info(cache_stats['error'])
 
 def display_query_history():
     """Отображение истории запросов"""
@@ -279,6 +315,28 @@ def display_analytics():
             title="Наиболее частые проблемы"
         )
         st.plotly_chart(fig_bar, use_container_width=True)
+    
+    # Аналитика кэша
+    if st.session_state.quality_rag.enable_caching:
+        cache_stats = st.session_state.quality_rag.get_cache_stats()
+        if 'error' not in cache_stats and cache_stats.get('total_requests', 0) > 0:
+            st.subheader("💾 Эффективность кэша")
+            
+            # График эффективности кэша
+            cache_data = pd.DataFrame([
+                {'Тип': 'Cache Hits', 'Количество': cache_stats.get('cache_hits', 0)},
+                {'Тип': 'Cache Misses', 'Количество': cache_stats.get('cache_misses', 0)}
+            ])
+            
+            if not cache_data.empty and cache_data['Количество'].sum() > 0:
+                fig_cache = px.pie(
+                    cache_data, 
+                    values='Количество', 
+                    names='Тип',
+                    title=f"Эффективность кэша (Hit Rate: {cache_stats.get('hit_rate', '0%')})",
+                    color_discrete_map={'Cache Hits': '#2E8B57', 'Cache Misses': '#DC143C'}
+                )
+                st.plotly_chart(fig_cache, use_container_width=True)
     
     # Рекомендации
     performance_report = st.session_state.quality_rag.get_performance_report()

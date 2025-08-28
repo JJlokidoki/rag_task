@@ -1,7 +1,8 @@
-pip install -r requirements.txt
-
-создать файл с GIGACHAT_CREDENTIALS=<token>
-
-в папку doc_files положить документы
-
-`python rag_data.py`
+1. python3 -m venv .
+2. source .venv/bin/activate
+3. создать файл с названием '.env' со строкой GIGACHAT_CREDENTIALS=<token>
+4. в папку doc_files/pdf положить pdf документы
+5. в папку doc_files/xls положить xls документы
+6. make install
+7. make prepare
+8. make run

@@ -1,209 +1,26 @@
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_gigachat import GigaChatEmbeddings
-from langchain_gigachat import GigaChat
-
-from langchain_chroma import Chroma
-
-from chromadb.config import Settings
+# from langchain.chains.combine_documents import create_stuff_documents_chain
 
 import os
 from dotenv import find_dotenv, load_dotenv
 import getpass
 import json
 import re
-import time
-import logging
 from datetime import datetime
-from typing import Dict, List, Optional
-import hashlib
+from typing import Dict, List
 
+from utils.logger import logger
+from rag.llm import VECTOR_STORE, LLM
+from prompts.crypto_expert import CRYPTO_EXPERT_PROMPT, CRYPTO_EXPERT_REFINEMENT_PROMPT
+from prompts.crypto_verificator import CRYPTO_VERIFICATOR_PROMPT
+from utils.perfomance_monitor import PerformanceMonitor
+from utils.query_cache import QueryCache
+
+# load .env
 load_dotenv(find_dotenv())
 
 if "GIGACHAT_CREDENTIALS" not in os.environ:
     os.environ["GIGACHAT_CREDENTIALS"] = getpass.getpass("Введите ключ авторизации GigaChat API: ")
 
-EMBEDDINGS = GigaChatEmbeddings(verify_ssl_certs=False)
-
-VECTOR_STORE = Chroma(
-    embedding_function=EMBEDDINGS,
-    client_settings=Settings(anonymized_telemetry=False),
-    persist_directory='./vector_db'
-)
-
-PROMPT = ChatPromptTemplate.from_template(
-"""
-Ты эксперт по вопросам криптографии с юридической квалификацией. Отвечай ТОЛЬКО на основе предоставленного контекста.
-Если информации недостаточно - вежливо откажись отвечать. Сохраняй профессиональный тон.
-
-**Роль:**
-- Эксперт по криптографии
-- Юрист со знаниями об криптографии
-
-**Инструкции:**
-1. Анализируй контекст из базы знаний
-2. Отвечай макимально конкретно на вопрос
-3. Если в контексте нет ответа: "Извините, ХЗ"
-4. Для сложных вопросов разбивай ответ на пункты
-
-**Стиль ответа:**
-- Отвечай точно
-- Добавляй название файла в котором найдена информация в конце ответа
-
-**Пример ответа:**
-<основной ответ из контекста>
-Найдено в документе: <название документа>
-
-Context: {context}
-Question: {input}
-"""
-)
-# "Question: {question}" for rag similarity
-# "Question: {input}" for rag-chain
-
-LLM = GigaChat(verify_ssl_certs=False, model="GigaChat-2-Max", temperature=0.1)
-
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('rag_quality_log.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-class PerformanceMonitor:
-    """Класс для мониторинга производительности RAG системы"""
-    
-    def __init__(self):
-        self.metrics = {
-            'total_queries': 0,
-            'successful_queries': 0,
-            'average_response_time': 0.0,
-            'average_iterations': 0.0,
-            'average_quality_score': 0.0,
-            'quality_distribution': {'0.0-0.5': 0, '0.5-0.7': 0, '0.7-0.9': 0, '0.9-1.0': 0},
-            'improvement_types': {},
-            'query_history': []
-        }
-    
-    def start_query(self) -> float:
-        """Начать отслеживание времени запроса"""
-        return time.time()
-    
-    def end_query(self, start_time: float, result: Dict) -> Dict:
-        """Завершить отслеживание и обновить метрики"""
-        end_time = time.time()
-        response_time = end_time - start_time
-        
-        self.metrics['total_queries'] += 1
-        if result['quality_acceptable']:
-            self.metrics['successful_queries'] += 1
-        
-        # Обновляем средние значения
-        self._update_averages(response_time, result)
-        
-        # Обновляем распределение качества
-        self._update_quality_distribution(result['final_score'])
-        
-        # Анализируем типы улучшений
-        self._analyze_improvements(result['verification_history'])
-        
-        # Сохраняем историю
-        query_record = {
-            'timestamp': datetime.now().isoformat(),
-            'question': result['question'],
-            'response_time': response_time,
-            'iterations': result['iterations'],
-            'final_score': result['final_score'],
-            'quality_acceptable': result['quality_acceptable']
-        }
-        self.metrics['query_history'].append(query_record)
-        
-        # Логируем
-        logger.info(f"Query processed: {response_time:.2f}s, {result['iterations']} iterations, score: {result['final_score']:.2f}")
-        
-        return {
-            'response_time': response_time,
-            'query_record': query_record
-        }
-    
-    def _update_averages(self, response_time: float, result: Dict):
-        """Обновить средние значения"""
-        n = self.metrics['total_queries']
-        
-        # Средний response time
-        self.metrics['average_response_time'] = (
-            (self.metrics['average_response_time'] * (n - 1) + response_time) / n
-        )
-        
-        # Среднее количество итераций
-        self.metrics['average_iterations'] = (
-            (self.metrics['average_iterations'] * (n - 1) + result['iterations']) / n
-        )
-        
-        # Средняя оценка качества
-        self.metrics['average_quality_score'] = (
-            (self.metrics['average_quality_score'] * (n - 1) + result['final_score']) / n
-        )
-    
-    def _update_quality_distribution(self, score: float):
-        """Обновить распределение оценок качества"""
-        if score < 0.5:
-            self.metrics['quality_distribution']['0.0-0.5'] += 1
-        elif score < 0.7:
-            self.metrics['quality_distribution']['0.5-0.7'] += 1
-        elif score < 0.9:
-            self.metrics['quality_distribution']['0.7-0.9'] += 1
-        else:
-            self.metrics['quality_distribution']['0.9-1.0'] += 1
-    
-    def _analyze_improvements(self, verification_history: List[Dict]):
-        """Анализировать типы улучшений"""
-        for verification in verification_history:
-            for improvement in verification.get('improvements', []):
-                if improvement not in self.metrics['improvement_types']:
-                    self.metrics['improvement_types'][improvement] = 0
-                self.metrics['improvement_types'][improvement] += 1
-    
-    def get_metrics_summary(self) -> Dict:
-        """Получить сводку метрик"""
-        success_rate = (
-            self.metrics['successful_queries'] / self.metrics['total_queries'] 
-            if self.metrics['total_queries'] > 0 else 0
-        )
-        
-        return {
-            'total_queries': self.metrics['total_queries'],
-            'success_rate': f"{success_rate:.2%}",
-            'average_response_time': f"{self.metrics['average_response_time']:.2f}s",
-            'average_iterations': f"{self.metrics['average_iterations']:.2f}",
-            'average_quality_score': f"{self.metrics['average_quality_score']:.2f}",
-            'quality_distribution': self.metrics['quality_distribution'],
-            'top_improvements': dict(sorted(
-                self.metrics['improvement_types'].items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )[:5])
-        }
-    
-    def save_metrics(self, filename: str = 'rag_metrics.json'):
-        """Сохранить метрики в файл"""
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(self.metrics, f, ensure_ascii=False, indent=2)
-        logger.info(f"Metrics saved to {filename}")
-    
-    def load_metrics(self, filename: str = 'rag_metrics.json'):
-        """Загрузить метрики из файла"""
-        try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                self.metrics = json.load(f)
-            logger.info(f"Metrics loaded from {filename}")
-        except FileNotFoundError:
-            logger.warning(f"Metrics file {filename} not found, starting fresh")
 
 class QualityAnalytics:
     """Класс для аналитики качества ответов"""
@@ -285,154 +102,13 @@ class QualityAnalytics:
         
         return recommendations if recommendations else ["Система работает оптимально!"]
 
-class QueryCache:
-    """Система кэширования для RAG запросов"""
-    
-    def __init__(self, cache_dir: str = "cache", max_cache_size: int = 1000):
-        self.cache_dir = cache_dir
-        self.max_cache_size = max_cache_size
-        self.cache_file = os.path.join(cache_dir, "query_cache.json")
-        self.cache = {}
-        
-        # Создаем директорию для кэша
-        os.makedirs(cache_dir, exist_ok=True)
-        
-        # Загружаем существующий кэш
-        self.load_cache()
-    
-    def _generate_cache_key(self, question: str, quality_threshold: float, max_iterations: int) -> str:
-        """Генерация ключа кэша на основе параметров запроса"""
-        key_string = f"{question.lower().strip()}_{quality_threshold}_{max_iterations}"
-        return hashlib.md5(key_string.encode()).hexdigest()
-    
-    def get(self, question: str, quality_threshold: float, max_iterations: int) -> Optional[Dict]:
-        """Получить результат из кэша"""
-        cache_key = self._generate_cache_key(question, quality_threshold, max_iterations)
-        
-        if cache_key in self.cache:
-            cached_result = self.cache[cache_key]
-            # Проверяем актуальность (например, кэш действителен 24 часа)
-            cache_time = datetime.fromisoformat(cached_result['cached_at'])
-            current_time = datetime.now()
-            
-            if (current_time - cache_time).total_seconds() < 86400:  # 24 часа
-                logger.info(f"Cache hit for question: {question[:50]}...")
-                return cached_result['result']
-            else:
-                # Удаляем устаревший кэш
-                del self.cache[cache_key]
-        
-        logger.info(f"Cache miss for question: {question[:50]}...")
-        return None
-    
-    def set(self, question: str, quality_threshold: float, max_iterations: int, result: Dict):
-        """Сохранить результат в кэш"""
-        cache_key = self._generate_cache_key(question, quality_threshold, max_iterations)
-        
-        # Управление размером кэша
-        if len(self.cache) >= self.max_cache_size:
-            # Удаляем самый старый элемент
-            oldest_key = min(
-                self.cache.keys(), 
-                key=lambda k: self.cache[k]['cached_at']
-            )
-            del self.cache[oldest_key]
-        
-        self.cache[cache_key] = {
-            'result': result,
-            'cached_at': datetime.now().isoformat(),
-            'question': question[:100]  # Сохраняем часть вопроса для отладки
-        }
-        
-        self.save_cache()
-        logger.info(f"Cached result for question: {question[:50]}...")
-    
-    def save_cache(self):
-        """Сохранить кэш в файл"""
-        try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving cache: {e}")
-    
-    def load_cache(self):
-        """Загрузить кэш из файла"""
-        try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    self.cache = json.load(f)
-                logger.info(f"Loaded {len(self.cache)} items from cache")
-        except Exception as e:
-            logger.warning(f"Error loading cache: {e}")
-            self.cache = {}
-    
-    def clear_cache(self):
-        """Очистить весь кэш"""
-        self.cache = {}
-        if os.path.exists(self.cache_file):
-            os.remove(self.cache_file)
-        logger.info("Cache cleared")
-    
-    def get_cache_stats(self) -> Dict:
-        """Получить статистику кэша"""
-        if not self.cache:
-            return {"total_items": 0, "cache_size": 0}
-        
-        cache_times = [
-            datetime.fromisoformat(item['cached_at']) 
-            for item in self.cache.values()
-        ]
-        
-        return {
-            "total_items": len(self.cache),
-            "oldest_item": min(cache_times).isoformat(),
-            "newest_item": max(cache_times).isoformat(),
-            "cache_file_size": os.path.getsize(self.cache_file) if os.path.exists(self.cache_file) else 0
-        }
 
 class AnswerQualityVerifier:
     """Агент для проверки качества и полноты ответов"""
     
     def __init__(self, llm):
         self.llm = llm
-        self.verification_prompt = ChatPromptTemplate.from_template(
-            """
-            Ты - эксперт по оценке качества ответов в системах криптографии и информационной безопасности.
-            
-            Твоя задача: оценить полноту и точность ответа на основе предоставленного контекста.
-            
-            **Критерии оценки:**
-            1. Полнота ответа (отвечает ли на все аспекты вопроса)
-            2. Точность (соответствует ли контексту документов)
-            3. Релевантность (связан ли ответ с вопросом)
-            4. Юридическая корректность (для нормативных актов)
-            
-            **Шкала оценки:**
-            - 1.0: Идеальный ответ - полный, точный, юридически корректный
-            - 0.9: Очень хороший ответ - незначительные недочеты
-            - 0.8: Хороший ответ - есть что улучшить
-            - 0.7: Удовлетворительный ответ - значительные недочеты
-            - 0.6 и ниже: Неудовлетворительный ответ - требует переработки
-            
-            **Исходный вопрос:** {question}
-            
-            **Контекст из документов:**
-            {context}
-            
-            **Полученный ответ:**
-            {answer}
-            
-            **Инструкция:**
-            Оцени ответ по шкале от 0.0 до 1.0 и дай краткое обоснование.
-            Верни результат СТРОГО в JSON формате:
-            {{
-                "score": 0.X,
-                "reasoning": "краткое обоснование оценки",
-                "improvements": ["что можно улучшить", "еще одно улучшение"],
-                "is_acceptable": true/false
-            }}
-            """
-        )
+        self.verification_prompt = CRYPTO_VERIFICATOR_PROMPT
     
     def verify_answer(self, question: str, context: str, answer: str) -> Dict:
         """
@@ -518,56 +194,10 @@ class QualityControlledRAG:
         self.cache_misses = 0
         
         # Основной RAG промпт
-        self.main_prompt = ChatPromptTemplate.from_template(
-            """
-            Ты эксперт по вопросам криптографии с юридической квалификацией. Отвечай ТОЛЬКО на основе предоставленного контекста.
-            Если информации недостаточно - вежливо откажись отвечать. Сохраняй профессиональный тон.
-
-            **Роль:**
-            - Эксперт по криптографии
-            - Юрист со знаниями об криптографии
-
-            **Инструкции:**
-            1. Анализируй контекст из базы знаний
-            2. Отвечай максимально конкретно на вопрос
-            3. Если в контексте нет ответа: "Извините, в предоставленных документах нет информации для ответа на этот вопрос"
-            4. Для сложных вопросов разбивай ответ на пункты
-            5. ОБЯЗАТЕЛЬНО указывай источник информации
-
-            **Стиль ответа:**
-            - Отвечай точно и полно
-            - Добавляй название файла в котором найдена информация в конце ответа
-            - Используй профессиональную терминологию
-
-            **Дополнительные требования (если есть):**
-            {additional_requirements}
-
-            Context: {context}
-            Question: {input}
-            """
-        )
+        self.main_prompt = CRYPTO_EXPERT_PROMPT
         
         # Промпт для доработки
-        self.refinement_prompt = ChatPromptTemplate.from_template(
-            """
-            Ты эксперт по криптографии. Предыдущий ответ требует доработки.
-
-            **Исходный вопрос:** {question}
-            
-            **Контекст из документов:**
-            {context}
-            
-            **Предыдущий ответ:**
-            {previous_answer}
-            
-            **Требования для улучшения:**
-            {improvements}
-            
-            **Инструкция:**
-            Создай улучшенный ответ, учитывая замечания. Будь более полным и точным.
-            Обязательно укажи источники информации.
-            """
-        )
+        self.refinement_prompt = CRYPTO_EXPERT_REFINEMENT_PROMPT
     
     def get_answer_with_quality_control(self, question: str, verbose: bool = True) -> Dict:
         """
@@ -756,26 +386,7 @@ class QualityControlledRAG:
         
         return report
 
-# Примеры использования
-
-# 1. Старый метод (для сравнения)
-def old_method_example():
-    question = "что такое УЦ?"
-    rag_chain = create_stuff_documents_chain(LLM, PROMPT)
-    retrieval_chain = create_retrieval_chain(
-        VECTOR_STORE.as_retriever(
-            search_kwargs={ "k": 2 },
-            search_type="similarity"
-        ),
-        rag_chain
-    )
-    
-    answer = retrieval_chain.invoke({"input": question})["answer"]
-    print("=== СТАРЫЙ МЕТОД ===")
-    print(answer)
-    return answer
-
-# 2. Новый метод с контролем качества и мониторингом
+# метод с контролем качества и мониторингом
 def quality_controlled_example():
     question = "что такое УЦ?"
     
@@ -884,18 +495,9 @@ def batch_quality_test():
     return results
 
 if __name__ == "__main__":
-    # Запускаем сравнение методов
-    print("Сравнение старого и нового методов:\n")
-    
-    # Старый метод
-    old_answer = old_method_example()
-    
-    print("\n" + "="*80 + "\n")
-    
     # Новый метод с контролем качества
     quality_result = quality_controlled_example()
     
-    # Дополнительная статистика
     print(f"\n📈 ИСТОРИЯ УЛУЧШЕНИЙ:")
     for i, verification in enumerate(quality_result['verification_history'], 1):
         print(f"Итерация {i}: {verification['score']:.2f} - {verification['reasoning']}")
@@ -926,7 +528,6 @@ if __name__ == "__main__":
     print("1. Одиночный вопрос с детальным выводом")
     print("2. Batch тестирование (4 вопроса)")
     print("3. Интерактивный режим")
-    print("4. Сравнение со старым методом")
     
     choice = input("\nВведите номер (1-4): ").strip()
     
@@ -936,16 +537,7 @@ if __name__ == "__main__":
         batch_quality_test()
     elif choice == "3":
         interactive_quality_test()
-    elif choice == "4":
-        # Старый метод
-        old_answer = old_method_example()
-        print("\n" + "="*80 + "\n")
-        # Новый метод
-        quality_result = quality_controlled_example()
-        # Сравнение
-        print(f"\n📋 СРАВНЕНИЕ:")
-        print(f"Старый метод: базовый ответ")
-        print(f"Новый метод: {quality_result['iterations']} итераций, оценка {quality_result['final_score']:.2f}")
+
     else:
         print("Неверный выбор. Запускаем режим по умолчанию...")
         quality_controlled_example()

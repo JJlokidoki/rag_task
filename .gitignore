@@ -1,5 +1,6 @@
 .env
-doc_files/
+doc_files/pdf/*
+doc_files/xls/*
 .venv/
 vector_db
 *.log
